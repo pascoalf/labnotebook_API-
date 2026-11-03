@@ -1,13 +1,24 @@
 """Small eLabFTW API v2 client and command-line entry point."""
 
 import argparse
+from getpass import getpass
 import json
 import os
 from pathlib import Path
 import sys
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
+
+
+def normalize_url(url):
+    parsed = urlsplit(url.strip())
+    path = parsed.path.rstrip("/")
+    if path.endswith(".php"):
+        path = path.rsplit("/", 1)[0]
+    if not path.endswith("/api/v2"):
+        path += "/api/v2"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
 class ElabClient:
@@ -31,7 +42,16 @@ class ElabClient:
             allow_redirects=False, **kwargs,
         )
         if not 200 <= response.status_code < 300:
-            raise RuntimeError(f"API returned HTTP {response.status_code}; check URL, key, permissions and record ID")
+            detail = "Check your API key and permissions."
+            if response.status_code == 404:
+                detail = (
+                    "This endpoint or record was not found. If this was the connection check, "
+                    "the server may not expose /info or API v2 at this address. "
+                    "Check the eLabFTW version and API routing with your administrator."
+                )
+            raise RuntimeError(
+                f"HTTP {response.status_code} for {method} {self.url}/{path}. {detail}"
+            )
         if not response.content:
             return {"location": response.headers.get("Location")}
         try:
@@ -54,9 +74,54 @@ def positive_id(value):
     return number
 
 
+def prompt_choice(prompt, choices):
+    while True:
+        value = input(prompt).strip()
+        if value in choices:
+            return choices[value]
+        print("Choose one of: " + ", ".join(choices))
+
+
+def interactive_action():
+    print("\n1. Check connection\n2. Read a record\n3. Upload a file\n4. Exit")
+    command = prompt_choice("Action [1-4]: ", {
+        "1": "info", "2": "get", "3": "upload", "4": "exit",
+    })
+    args = argparse.Namespace(command=command)
+    if command in ("get", "upload"):
+        args.entity = prompt_choice("Record type (1 = experiment, 2 = resource): ", {
+            "1": "experiments", "2": "items",
+        })
+        while True:
+            try:
+                args.id = positive_id(input("Record ID: ").strip())
+                break
+            except (ValueError, argparse.ArgumentTypeError):
+                print("Enter a positive numeric record ID.")
+    if command == "upload":
+        while True:
+            args.file = Path(input("File path: ").strip()).expanduser()
+            if args.file.is_file():
+                break
+            print("Enter the path to an existing file.")
+        args.comment = input("Comment (optional): ").strip()
+        print(f"Upload {args.file} to {args.entity}/{args.id}")
+        if input("Proceed? [y/N]: ").strip().lower() not in ("y", "yes"):
+            args.command = "cancel"
+    return args
+
+
+def execute(client, args):
+    if args.command == "info":
+        return client.request("GET", "info")
+    if args.command == "get":
+        return client.request("GET", f"{args.entity}/{args.id}")
+    return client.upload(args.entity, args.id, args.file, args.comment)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    commands = parser.add_subparsers(dest="command", required=True)
+    commands = parser.add_subparsers(dest="command")
     commands.add_parser("info", help="Read server information (connection check)")
     for command in ("get", "upload"):
         sub = commands.add_parser(command)
@@ -67,17 +132,34 @@ def main():
             sub.add_argument("--comment", default="")
     args = parser.parse_args()
     try:
-        client = ElabClient(os.getenv("ELABFTW_URL", ""), os.getenv("ELABFTW_API_KEY", ""))
+        interactive = args.command is None
+        url = os.getenv("ELABFTW_URL", "")
+        api_key = os.getenv("ELABFTW_API_KEY", "")
+        if interactive:
+            print("eLabFTW — your API key identifies your user account.")
+            print("Credentials are used for this session only and are not saved.")
+            url = input(f"Server URL{f' [{url}]' if url else ''}: ").strip() or url
+            url = normalize_url(url)
+            print(f"API address: {url}")
+            api_key = getpass("API key (hidden; Enter to use environment key): ") or api_key
+        client = ElabClient(url, api_key)
         try:
-            if args.command == "info":
-                result = client.request("GET", "info")
-            elif args.command == "get":
-                result = client.request("GET", f"{args.entity}/{args.id}")
-            else:
-                result = client.upload(args.entity, args.id, args.file, args.comment)
+            while True:
+                if interactive:
+                    args = interactive_action()
+                    if args.command == "exit":
+                        break
+                    if args.command == "cancel":
+                        continue
+                result = execute(client, args)
+                print(json.dumps(result, indent=2))
+                if not interactive:
+                    break
         finally:
             client.session.close()
-        print(json.dumps(result, indent=2))
+        return 0
+    except (KeyboardInterrupt, EOFError):
+        print("\nSession ended.", file=sys.stderr)
         return 0
     except requests.RequestException:
         print("Network request failed. Check connectivity and TLS certificates. If uploading, verify the record before retrying: the upload may have completed.", file=sys.stderr)

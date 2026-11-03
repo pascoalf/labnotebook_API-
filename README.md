@@ -9,10 +9,20 @@ Requires Python 3.10 or newer.
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-cp .env.example .env
+python elab.py
 ```
 
-Edit `.env` locally with your server's full API URL and API key. Include any
+The interactive mode asks for your server URL and API key (hidden while typing),
+then offers a menu to check the connection, read a record, upload a file, or exit.
+You can enter the server's base URL; `/api/v2` is appended automatically.
+No username or password is needed: the API key identifies your account.
+Credentials stay in memory for the session and are not saved to disk.
+Uploads ask for the record type, record ID, file path, optional comment, and
+confirmation before sending. You can perform several actions in one session.
+
+## Optional configuration for direct commands
+
+Copy `.env.example` to `.env` and edit it locally with your full API URL and API key. Include any
 installation subpath before `/api/v2`. Create the key in eLabFTW Settings;
 uploads require write access and permission to edit the target record.
 Keep the key out of chat, source code, and commits. `.env` is ignored by Git.
