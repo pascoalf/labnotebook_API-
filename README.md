@@ -1,5 +1,11 @@
 # eLabFTW CLI
 
+![Status: Experimental](https://img.shields.io/badge/status-experimental-orange?style=flat-square)
+![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)
+[![eLabFTW: API v2](https://img.shields.io/badge/eLabFTW-API_v2-008080?style=flat-square)](https://doc.elabftw.net/docs/usage/api/)
+![Interface: CLI](https://img.shields.io/badge/interface-CLI-4D4D4D?style=flat-square&logo=gnometerminal&logoColor=white)
+[![Development: Codex assisted](https://img.shields.io/badge/development-Codex_assisted-7451C8?style=flat-square)](#development-disclosure)
+
 A small Python command-line tool for working with an [eLabFTW](https://www.elabftw.net/)
 notebook through its REST API v2. Create and edit experiments in your preferred
 text editor, read records, and attach files to experiments or resources.
@@ -7,6 +13,8 @@ text editor, read records, and attach files to experiments or resources.
 ## Requirements
 
 - Python 3.10 or newer.
+- The Python package `requests` (the only external Python dependency).
+- Git to clone the repository, or download and extract its ZIP from GitHub.
 - Access to an eLabFTW instance with API v2 enabled.
 - An API key from your eLabFTW account's **Settings**. Creating, editing, and
   uploading require a key with write access and permission to modify the record.
@@ -15,7 +23,36 @@ text editor, read records, and attach files to experiments or resources.
 
 ## Quick start
 
-Clone this repository and open its directory, then run:
+Get the code:
+
+```bash
+git clone https://github.com/pascoalf/labnotebook_API-.git
+cd labnotebook_API-
+```
+
+If `requests` is already installed in your Python environment, simply run:
+
+```bash
+python3 elab.py
+```
+
+Otherwise, install the dependency once, then run the script:
+
+```bash
+python3 -m pip install -r requirements.txt
+python3 elab.py
+```
+
+There is no application installation or build step. On Windows, use `python`
+instead of `python3` if that is how Python is available on your machine.
+You can also download **Code → Download ZIP** on GitHub instead of using Git,
+extract it, and open a terminal in the extracted directory.
+
+### Optional: use a virtual environment
+
+A virtual environment keeps this project's dependency separate from other
+Python packages. Use one if you prefer isolation or if pip reports an
+`externally-managed-environment` error:
 
 ```bash
 python3 -m venv .venv
@@ -25,6 +62,10 @@ python elab.py
 ```
 
 On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1` instead.
+For later sessions, activate the environment again before running the script;
+you do not need to reinstall the dependency each time.
+
+### Connect to your notebook
 
 Enter your server address, for example `https://eln.example.org`, and your API
 key when prompted. The key is hidden while typing; it identifies your account,
@@ -164,6 +205,23 @@ This is a small, unofficial client, not a complete eLabFTW SDK. Resource creatio
 export import, template selection, and batch operations are not implemented.
 Local mocked checks cover core workflows; compatibility depends on your server
 version and configuration. Start with a test experiment on your own instance.
+
+## Feature requests and feedback
+
+Missing a capability? [Open an issue](https://github.com/pascoalf/labnotebook_API-/issues)
+to suggest new features, describe a workflow you would like supported, or report
+a bug. Include what you want to achieve and, where relevant, your eLabFTW version.
+Keep API keys and private laboratory data out of issues and screenshots.
+
+## Development disclosure
+
+This code and its documentation were generated with OpenAI Codex under the
+repository maintainer's supervision and direction. The local tool reported
+`codex-cli 0.166.0` during preparation of this disclosure (November 2026);
+this identifies the tool version, not an independently verified model version.
+AI-generated code can contain errors. Review changes and test with a disposable
+experiment before using it with important laboratory records. This project is
+not an official OpenAI or eLabFTW product.
 
 ## API documentation
 
