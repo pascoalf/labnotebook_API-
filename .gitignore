@@ -4,4 +4,12 @@
 !.env.example
 __pycache__/
 *.pyc
-2026-11-03-121351-export.eln
+# Notebook exports may contain private laboratory and profile data.
+*.eln
+# Local tool configuration and editor draft files.
+.agents/
+.aws/
+.codex/
+*.swp
+*.swo
+*~
