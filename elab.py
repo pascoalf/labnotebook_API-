@@ -5,7 +5,11 @@ from getpass import getpass
 import json
 import os
 from pathlib import Path
+import shlex
+import shutil
+import subprocess
 import sys
+import tempfile
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
@@ -35,7 +39,7 @@ class ElabClient:
         self.session = requests.Session()
         self.session.headers.update({"Authorization": api_key.strip(), "Accept": "application/json"})
 
-    def request(self, method, path, **kwargs):
+    def request(self, method, path, *, return_location=False, **kwargs):
         # Refuse redirects so credentials cannot be forwarded to another endpoint.
         response = self.session.request(
             method, f"{self.url}/{path}", timeout=(10, 120),
@@ -52,7 +56,7 @@ class ElabClient:
             raise RuntimeError(
                 f"HTTP {response.status_code} for {method} {self.url}/{path}. {detail}"
             )
-        if not response.content:
+        if return_location or not response.content:
             return {"location": response.headers.get("Location")}
         try:
             return response.json()
@@ -65,6 +69,26 @@ class ElabClient:
                 "POST", f"{entity}/{record_id}/uploads",
                 files={"file": (Path(path).name, handle)}, data={"comment": comment},
             )
+
+    def create_experiment(self, title, body):
+        if not title.strip():
+            raise ValueError("The experiment title cannot be empty")
+        created = self.request("POST", "experiments", json={}, return_location=True)
+        location = created.get("location")
+        record_id = urlsplit(location or "").path.rstrip("/").rsplit("/", 1)[-1]
+        if not record_id.isdigit():
+            raise RuntimeError(
+                "An experiment was created, but its ID was not returned. "
+                "Check eLabFTW before creating another entry."
+            )
+        try:
+            self.request("PATCH", f"experiments/{record_id}", json={"title": title, "body": body})
+        except (requests.RequestException, RuntimeError) as exc:
+            raise RuntimeError(
+                f"Experiment {record_id} was created, but filling its title/text failed. "
+                "Open that entry in eLabFTW to finish editing it; do not create a duplicate."
+            ) from exc
+        return {"id": int(record_id), "location": location, "title": title}
 
 
 def positive_id(value):
@@ -82,16 +106,55 @@ def prompt_choice(prompt, choices):
         print("Choose one of: " + ", ".join(choices))
 
 
+def edit_experiment(title="", body=""):
+    editor = os.getenv("VISUAL") or os.getenv("EDITOR")
+    if editor:
+        command = shlex.split(editor)
+    else:
+        command = next(([name] for name in ("vim", "vi", "nano") if shutil.which(name)), [])
+    if not command or not shutil.which(command[0]):
+        raise RuntimeError("No text editor found. Set EDITOR, for example: export EDITOR=vim")
+    with tempfile.TemporaryDirectory(prefix="elab-draft-") as directory:
+        draft = Path(directory) / "experiment.txt"
+        draft.write_text(f"Title: {title}\n\n{body}", encoding="utf-8")
+        print("Write the title after 'Title:' on the first line, then the body below it.")
+        print("Save and quit to review. Leave the title empty to cancel.")
+        result = subprocess.run([*command, str(draft)], check=False)
+        if result.returncode != 0:
+            print("Editor exited unsuccessfully; no experiment created.")
+            return None
+        text = draft.read_text(encoding="utf-8")
+    first, _, body = text.partition("\n")
+    if not first.startswith("Title:"):
+        raise ValueError("The first line must start with 'Title:'. No experiment created.")
+    title = first.removeprefix("Title:").strip()
+    if not title:
+        print("Creation cancelled: no title entered.")
+        return None
+    return title, body.removeprefix("\n")
+
+
 def interactive_action():
-    print("\n1. Check connection\n2. Read a record\n3. Upload a file\n4. Exit")
-    command = prompt_choice("Action [1-4]: ", {
-        "1": "info", "2": "get", "3": "upload", "4": "exit",
+    print("\n1. Check connection\n2. Read a record\n3. Upload a file\n4. Exit\n5. Create an experiment\n6. Edit an experiment")
+    command = prompt_choice("Action [1-6]: ", {
+        "1": "info", "2": "get", "3": "upload", "4": "exit", "5": "create",
+        "6": "edit",
     })
     args = argparse.Namespace(command=command)
-    if command in ("get", "upload"):
-        args.entity = prompt_choice("Record type (1 = experiment, 2 = resource): ", {
-            "1": "experiments", "2": "items",
-        })
+    if command == "create":
+        draft = edit_experiment()
+        if draft is None:
+            args.command = "cancel"
+            return args
+        args.title, args.body = draft
+        print(f"\nTitle: {args.title}\nText:\n{args.body}")
+        if input("Create this experiment? [y/N]: ").strip().lower() not in ("y", "yes"):
+            args.command = "cancel"
+    if command in ("get", "upload", "edit"):
+        if command != "edit":
+            args.entity = prompt_choice("Record type (1 = experiment, 2 = resource): ", {
+                "1": "experiments", "2": "items",
+            })
         while True:
             try:
                 args.id = positive_id(input("Record ID: ").strip())
@@ -112,6 +175,25 @@ def interactive_action():
 
 
 def execute(client, args):
+    if args.command == "edit":
+        path = f"experiments/{args.id}"
+        original = client.request("GET", path)
+        before = (original["title"], original.get("body") or "")
+        print("The editor shows the stored body, which may contain HTML formatting.")
+        draft = edit_experiment(*before)
+        if draft is None or draft == before:
+            return {"message": "No changes saved"}
+        title, body = draft
+        print(f"\nExperiment ID: {args.id}\nTitle: {title}\nText:\n{body}")
+        if input("Replace this experiment's title and text? [y/N]: ").strip().lower() not in ("y", "yes"):
+            return {"message": "Edit cancelled; no changes saved"}
+        current = client.request("GET", path)
+        if (current["title"], current.get("body") or "") != before:
+            raise RuntimeError("The experiment changed while you were editing. No changes saved; reopen it to edit the latest version.")
+        client.request("PATCH", path, json={"title": title, "body": body})
+        return {"id": args.id, "message": "Experiment updated"}
+    if args.command == "create":
+        return client.create_experiment(args.title, args.body)
     if args.command == "info":
         return client.request("GET", "info")
     if args.command == "get":
@@ -123,6 +205,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("info", help="Read server information (connection check)")
+    create = commands.add_parser("create", help="Create an experiment")
+    create.add_argument("title")
+    create.add_argument("--body", default="", help="Experiment text")
+    edit = commands.add_parser("edit", help="Edit an existing experiment in your text editor")
+    edit.add_argument("id", type=positive_id)
     for command in ("get", "upload"):
         sub = commands.add_parser(command)
         sub.add_argument("entity", choices=("experiments", "items"))
@@ -162,7 +249,7 @@ def main():
         print("\nSession ended.", file=sys.stderr)
         return 0
     except requests.RequestException:
-        print("Network request failed. Check connectivity and TLS certificates. If uploading, verify the record before retrying: the upload may have completed.", file=sys.stderr)
+        print("Network request failed. Check connectivity and TLS certificates. If writing data, check eLabFTW before retrying: the operation may have completed.", file=sys.stderr)
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
     return 1
